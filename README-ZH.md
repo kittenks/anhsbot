@@ -1,5 +1,7 @@
 # anhsbot — A Nights Haunting Source 机器人插件
 
+![A Nights Haunting Source](https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3418380/b7b6a7a18c23e2e9625b4c4d15bc49c299bb647a/header_alt_assets_0.jpg?t=1791507492)
+
 `anhsbot` 是一个为 **A Nights Haunting Source (ANHS)** 开发的 SourceMod 机器人插件，
 仿照 `zpsbot` 的架构，用 fake client（假客户端）驱动 bot 的视角、移动与开火，使其能
 自主索敌、射击、走位、击杀地图中的僵尸 NPC，并统计击杀/死亡/伤害。

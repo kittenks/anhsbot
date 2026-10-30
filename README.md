@@ -1,5 +1,7 @@
 # anhsbot — A Nights Haunting Source Bot Plugin
 
+![A Nights Haunting Source](https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/3418380/b7b6a7a18c23e2e9625b4c4d15bc49c299bb647a/header_alt_assets_0.jpg?t=1791507492)
+
 `anhsbot` is a SourceMod bot plugin for **A Nights Haunting Source (ANHS)**, built after the
 `zpsbot` architecture. It drives fake clients (bots) through `OnPlayerRunCmd` to autonomously
 aim, move, path, and fire — hunting zombie NPCs on the map and tracking kills / deaths / damage.
