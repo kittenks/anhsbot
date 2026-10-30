@@ -6,7 +6,7 @@
  *
  *  引擎：ANHS = HL2MP(sdk2013) 引擎 + ZPS 代码血统（Steam AppId 243750）
  *
- *  本插件全部核心机制均在真机上逆向验证（见 HANDOFF.md）：
+ *  本插件全部核心机制均在真机上逆向验证：
  *   1) OnPlayerRunCmd 驱动前提：
  *      - gamedata PlayerRunCmd 必须是玩家 vtable[418]（offset 0x688），
  *        旧的 432（空函数）/426（bool getter）均错误。

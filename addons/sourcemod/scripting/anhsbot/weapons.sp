@@ -1,7 +1,7 @@
 /**
  * anhsbot/weapons.sp — 武器系统（全部基于真机逆向验证）
  *
- * 关键结论（ANHS server.dll，见 HANDOFF.md）：
+ * 关键结论（ANHS server.dll）：
  *  - GiveNamedItem = 玩家 vtable slot 400（RVA 0x2343e0）。sdktools 的 GivePlayerItem
  *    native 读 gamedata 的 GiveNamedItem，已在 custom/game.anhsource.txt 修正为 400。
  *    但它对 fake client 只把武器 spawn 在脚边、不装备（引擎 touch pickup 对 fake

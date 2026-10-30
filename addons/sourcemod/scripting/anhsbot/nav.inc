@@ -1,7 +1,7 @@
 /**
  * anhsbot/nav.inc — V社 .nav(v16) 解析 + A* 寻路 + 路径跟随 + 危险区规避
  *
- * 背景（见 HANDOFF.md / memory 2026-10-18）：
+ * 背景：
  *  - SM 1.12 无 navmesh.inc / TheNavMesh natives，导航必须自写。
  *  - ANHS 自带完整 Valve 导航系统：nav_generate 可为 26 张无 nav 地图现场烘焙，
  *    本插件只消费 .nav，不生成。
