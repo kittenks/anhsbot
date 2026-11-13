@@ -46,6 +46,15 @@ int   g_iCacheTeam[ANH_MAX_CACHE];
 int   g_iCacheCount = 0;
 float g_fCacheAt = -1.0;
 
+// NPC 血量缓存（bot 归因击杀时对比血量变化；NPC 无 player_death 事件）。
+// 索引 = 实体索引（与裸下标一致，NPC 索引恒 > MaxClients）；死亡时清空。
+float g_fCacheHp[4096];
+float g_fHpScanAt = -1.0;
+
+// 低血量 NPC 优先表（归因击杀提速：低血 NPC 排到候选表最前 + 提高重选频率）。
+int   g_iLowHpIdx[4];
+int   g_iLowHpCount = 0;
+
 // 玩家队伍是否敌对。
 // teamplay 开启（anhsbot_teamplay=1，默认）：幸存者 2/3 视为同一阵营，不互杀；
 // 关闭：2/3 互敌（HL2MP 原生，射击场双队互射验证用）。
@@ -313,6 +322,59 @@ public void Targ_RebuildCache()
     Dbg("Targ_RebuildCache entities=%d npcCached=%d", total, g_iCacheCount);
 }
 
+// 全局 NPC 血量低频刷新（每 0.5s 一次；bot 归因击杀依赖它，无 bot 时不跑）。
+// 同时完成击杀/伤害归因：血量下降 → 归给最近 5s 内打过该 NPC 的 bot；
+// 血量归零 → 击杀（ANHS 僵尸"死亡→复活"，实体不变，靠 0 值跳变计数）。
+public void Targ_ScanHp()
+{
+    float now = GetGameTime();
+    if (now - g_fHpScanAt < 0.5)
+        return;
+    g_fHpScanAt = now;
+    g_iLowHpCount = 0;
+    for (int c = 0; c < g_iCacheCount; c++)
+    {
+        int ent = EntRefToEntIndex(g_iCacheEnt[c]);
+        if (ent == -1 || !IsValidEntity(ent))
+        {
+            continue;
+        }
+        int hp = 0;
+        if (HasEntProp(ent, Prop_Data, "m_iHealth"))
+            hp = GetEntProp(ent, Prop_Data, "m_iHealth");
+        else
+            continue;
+        int old = RoundToNearest(g_fCacheHp[ent]);
+        g_fCacheHp[ent] = float(hp);
+        // 低血量（含刚死亡 0/负值）候选：全图最多取 4 个，归因时优先校验。
+        if (hp <= 60 && g_iLowHpCount < sizeof(g_iLowHpIdx))
+            g_iLowHpIdx[g_iLowHpCount++] = c;
+        // 血量上升（复活）：不归因，只记录。
+        if (hp >= old)
+            continue;
+        int delta = old - hp;
+        if (delta <= 0)
+            continue;
+        // 归因：最近 5s 内对这个实体造成过伤害的 bot。
+        for (int i = 1; i <= MaxClients; i++)
+        {
+            if (!IsClientInGame(i) || !IsFakeClient(i) || !g_Bot[i].bManaged)
+                continue;
+            if (g_Bot[i].iTarget != ent || now - g_Bot[i].fLastDamageAt > 5.0)
+                continue;
+            g_Bot[i].iDamageDealt += delta;
+            g_Bot[i].fLastDamageAt = now;   // 续命归因窗口
+            Dbg("bot %d attributed %d dmg to npc %d (total %d)",
+                i, delta, ent, g_Bot[i].iDamageDealt);
+            if (hp <= 0)
+            {
+                g_Bot[i].iKills++;
+                Log("bot %d killed npc %d (total %d)", i, ent, g_Bot[i].iKills);
+            }
+        }
+    }
+}
+
 // 缓存条目对某队伍是否敌对（类名表命中即敌对，否则看队伍）。
 public bool Targ_CacheEntryHostile(int idx, int myTeam)
 {
@@ -372,8 +434,9 @@ public int Targ_FindBest(int client)
 
     // 2) 敌对 NPC：先从缓存挑出最近的若干个候选（无 trace），再逐个验 LOS。
     //    避免"每个敌对 NPC 都做一次 trace"导致的脚本超时。
-    int cand[ANH_MAX_LOS];
-    float candDist[ANH_MAX_LOS];
+    //    低血量候选（血 <60）追加进候选表最末（归因提速 + 优先收残血人头）。
+    int cand[ANH_MAX_LOS + 4];
+    float candDist[sizeof(cand)];
     int nCand = 0;
     float npcRangeSq = ANH_FOV_NPC * ANH_FOV_NPC;
 
@@ -409,7 +472,32 @@ public int Targ_FindBest(int client)
         }
     }
 
-    // 只对最近的候选做 LOS（最多 ANH_MAX_LOS 次 trace）
+    // 低血量候选：跳过已在表中的，追加到末尾（候选表上限 +4）。
+    for (int l = 0; l < g_iLowHpCount; l++)
+    {
+        int lc = g_iLowHpIdx[l];
+        if (!Targ_CacheEntryHostile(lc, myTeam))
+            continue;
+        bool inList = false;
+        for (int k = 0; k < nCand; k++)
+        {
+            if (cand[k] == lc)
+            {
+                inList = true;
+                break;
+            }
+        }
+        if (inList || nCand >= sizeof(cand))
+            continue;
+        float d = GetVectorDistance(myEye, g_fCachePos[lc], true);
+        if (d >= npcRangeSq)
+            continue;
+        cand[nCand] = lc;
+        candDist[nCand] = d;
+        nCand++;
+    }
+
+    // 只对候选做 LOS（最多 sizeof(cand) 次 trace）
     for (int k = 0; k < nCand; k++)
     {
         int c = cand[k];

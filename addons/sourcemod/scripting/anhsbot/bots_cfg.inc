@@ -70,7 +70,7 @@ stock void BotsCfg_Pick(char name[64], int &skill)
     if (g_iNamePoolCount <= 0)
     {
         name[0] = '\0';
-        skill = (g_cvSkill != null) ? g_cvSkill.IntValue : 1;
+        skill = -1;   // 无池：交给 Bot_ResolveSkill 按 anhsbot_skill / 默认 1 处理
         return;
     }
     strcopy(name, 64, g_szNamePool[g_iNameCursor]);

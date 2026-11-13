@@ -32,6 +32,7 @@ aim, move, path, and fire — hunting zombie NPCs on the map and tracking kills 
 
    ```
    addons/sourcemod/plugins/anhsbot.smx
+   addons/sourcemod/plugins/anhsnav.smx
    addons/sourcemod/gamedata/sdktools.games/custom/game.anhsource.txt
    addons/sourcemod/configs/anhsbot_bots.cfg
    cfg/sourcemod/plugin.anhsbot.cfg
@@ -79,7 +80,7 @@ an existing file is never overwritten). All cvars can also be changed live via r
 | `anhsbot_teamplay` | `1` | Teamplay: survivor teams 2/3 treat each other as teammates (no infighting, no friendly fire, regroup when idle). 0 = free-for-all. |
 | `anhsbot_nav` | `1` | Nav A* pathfinding switch. Enabled on maps with a `.nav` file; maps without one fall back to pure geometric movement. |
 | `anhsbot_no_achievements` | `1` | Disable `logic_achievement` entities on map start (works around a fake-client achievement null-pointer crash). |
-| `anhsbot_skill` | `2` | Default bot skill: 0=low 1=normal 2=high 3=elite (aim error and reaction). |
+| `anhsbot_skill` | `-1` | Bot skill: `-1` = use the per-name level from `anhsbot_bots.cfg`; 0=low 1=normal 2=high 3=elite (global override when >=0). |
 | `anhsbot_name_prefix` | `AnhBot` | Bot name prefix (used when no name pool is installed; auto 2-digit suffix). |
 | `anhsbot_autofill` | `1` | Automatically maintain the target bot count. |
 | `anhsbot_fill_interval` | `3.0` | Seconds between autofill checks. |
@@ -89,6 +90,29 @@ an existing file is never overwritten). All cvars can also be changed live via r
 
 **Bot name pool**: `addons/sourcemod/configs/anhsbot_bots.cfg`, one `<name> <skill 0-3>` per
 line, 32 presets. Delete the file to fall back to the name-prefix scheme.
+
+---
+
+## 5. Companion plugin: `anhsnav` (navmesh generator)
+
+`anhsnav.smx` ships alongside `anhsbot.smx`. It intercepts **every `nav_*` command**
+(Valve-identical names/semantics, see `nav*.cpp` in source-sdk-2013) and adds an
+offline navmesh baker so maps without a `.nav` can still be pathed:
+
+- **`nav_generate` / `nav_progress` / `nav_save` / `nav_load` / `nav_analyze`** —
+  bakes a v16 `.nav` (grid-sample → flood-fill islands → rectangle merge →
+  connectivity → write, chunked across frames so SourcePawn never times out).
+  Output goes to `maps/anhsbot/<map>.nav`, which `anhsbot` reads directly.
+- **`nav_perfframe` / `nav_perfframe_clear`** — report the plugin's own
+  per-frame script cost (guard against "Script execution timed out";
+  generation is capped at 8 ms/frame by an internal watchdog).
+- **All other `nav_*` commands** (editor-side, ~200 names total) are
+  acknowledged as handled instead of printing `Unknown command` or being
+  rejected as cheat commands.
+
+Install `anhsnav.smx` next to `anhsbot.smx` and both plugins load in any
+order. With `anhsnav_autogen 1`, a navmesh is baked automatically on map
+start (otherwise run `nav_generate` via rcon).
 
 ---
 
@@ -155,23 +179,31 @@ displacement; `TeleportEntity` does not work on fake clients). Three self-rescue
 | `anhsbot_diag` | Diagnostics: targeting cache/LOS/weapon-switch details. |
 | `anhsbot_tele <client> <x> <y> <z>` | Teleport a bot (note: teleport has limited effect on fake clients). |
 | `anhsbot_npc <class> <nearClient> [dist]` | Spawn an NPC in front of a bot (for testing). |
+| `anhsbot_navreload` | Reload the nav mesh from disk (after anhsnav's `nav_generate`/`nav_save`). |
+| `anhsbot_perf` | Performance observation: map/entity counts, NPC cache size, cumulative OnPlayerRunCmd calls. |
+| `anhsnav: nav_perfframe` | anhsnav's own per-frame script cost + last generation wall-time. |
+| `anhsnav: nav_perfframe_clear` | Reset the anhsnav perf counters. |
 
 ---
 
-## 6. Known limitations / roadmap
+## 7. Known limitations / roadmap
 
 - **Zombie team**: engine-limited (see section 4); the current form is human teams vs NPCs.
-- **Nav coverage**: 11 of 37 maps ship a `.nav` and support A\* pathfinding directly; the other
-  26 can be baked on the fly with the engine command `nav_generate` (needs `sv_cheats 1`). Where
-  a baked nav disagrees with runtime geometry, bots may sink into geometry — the three-layer
-  self-rescue recovers automatically; re-baking is the root fix.
-- **Respawn**: HL2MP has no round system / no `mp_forcerespawn`, so dead bots are rebuilt by the
-  watchdog via the native `CreateFakeClient` path (same name/team, stats carried over).
+- **Nav coverage**: maps that ship a `.nav` support A\* pathfinding directly; the rest can be
+  baked on the fly with `anhsnav`'s `nav_generate` (no `sv_cheats` required — all nav\_\*
+  commands are intercepted). Where a baked nav disagrees with runtime geometry, bots may sink
+  into geometry — the three-layer self-rescue recovers automatically; re-baking is the root
+  fix.
+- **Respawn**: HL2MP has no round system / no `mp_forcerespawn`, so dead bots are rebuilt by
+  the watchdog via the native `CreateFakeClient` path (same name/team, stats carried over).
+- **Kill attribution**: NPCs have no `player_death` event; kills are attributed by
+  entity-removal + damage-window heuristics, which can miss kills from third-party NPC
+  damage (zombie packs hitting each other is rare on ANHS maps).
 - **Anti-cheat / public net**: deploy with VAC/SV anti-cheat and `sv_pure 0` as appropriate.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 - **Bots don't move / `runcmds` is 0**: check `anhsbot_manage_flags` is 1, and that gamedata is
   in `sdktools.games/custom/`.
@@ -180,6 +212,9 @@ displacement; `TeleportEntity` does not work on fake clients). Three self-rescue
   `stuck (moved N in 2s, count N)`, followed by `scout walk` / `cursed N area(s)` /
   `geometry trap, rebuild scheduled` — these lines (each tagged with the bot index) are the
   self-rescue chain at work.
+- **Suspected frame drops**: run `anhsbot_perf` (script-load observation) and
+  `nav_perfframe` (anhsnav's own per-frame cost). Generation is capped at 8 ms/frame; SM's
+  timeout watchdog fires at 50 ms/frame. Engine tickrate is stable at 66.7 fps in cdb runs.
 - **Server crash**: cdb auto-writes `anh_crash.dmp` on crash; analyze with
   `cdb -z anh_crash.dmp -c "!analyze -v; q"`.
 - **Plugin load error**: run `sm plugins list` to see the error; usually a gamedata path/offset issue.

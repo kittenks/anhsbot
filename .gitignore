@@ -1,2 +1,3 @@
 # 编译产物 / build output (compiled by spcomp into scripting/)
 addons/sourcemod/scripting/*.smx
+addons/sourcemod/scripting/build/

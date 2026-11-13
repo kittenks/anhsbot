@@ -79,7 +79,7 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
     {
         Wep_EquipHumanLoadout(client);
         g_Bot[client].bArmed = true;
-        int primary = Wep_ChooseBestGun(client);
+        int primary = Wep_ChooseBestGun(client, ANH_RANGE_MID + 1.0);  // 初始持远档枪
         if (primary != -1)
             Wep_RequestSwitch(client, primary);
         Dbg("bot %d armed (skill %d)", client, g_Bot[client].iSkill);
@@ -94,6 +94,11 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
 
     // 3) 目标管理。
     int target = g_Bot[client].iTarget;
+
+    // 全局 NPC 血量缓存（每 0.5s 刷新一次，供伤害/击杀归因；bot 每帧调用但
+    // 内部有 TTL 闸门，实际只在 TTL 到期时扫描）。
+    Targ_ScanHp();
+
     if (target > 0 && !Targ_StillValid(client, target))
     {
         // 目标失效：NPC 没有 player_death 事件，只能靠"近期打到过它 + 它现在没了"
@@ -123,7 +128,14 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
         if (t > 0)
         {
             if (t != g_Bot[client].iTarget)
+            {
                 Dbg("bot %d acquired target %d", client, t);
+                // 新目标：按技能设置反应延迟（低技能 bot 不会秒开火）
+                int sk = g_Bot[client].iSkill;
+                if (sk < 0) sk = 0;
+                if (sk > ANH_SKILL_MAX) sk = ANH_SKILL_MAX;
+                g_Bot[client].fNextFireAt = now + g_fReactBySkill[sk];
+            }
             g_Bot[client].iTarget = t;
             target = t;
             g_Bot[client].fLastTargetHp = -1.0;
@@ -141,34 +153,26 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
         return Bot_IdleBehavior(client, buttons, angles, vel);
     }
 
-    // 3b) 伤害/击杀统计：对比当前目标血量变化。
+    // 3b) 伤害/击杀归因：已移到全局 Targ_ScanHp（0.5s 扫描，跨 bot 共享）——
+    // 血量下降 → 归因最近 5s 内打过该 NPC 的 bot；血量归零 → 计 1 kill。
+    // 这里只刷新本 bot 的追踪血量，供下次全局扫描对比用。
     if (HasEntProp(target, Prop_Data, "m_iHealth"))
     {
-        float hp = float(GetEntProp(target, Prop_Data, "m_iHealth"));
-        if (hp >= 0.0)
-        {
-            if (g_Bot[client].fLastTargetHp >= 0.0 && hp < g_Bot[client].fLastTargetHp)
-            {
-                int delta = RoundToNearest(g_Bot[client].fLastTargetHp - hp);
-                if (delta > 0)
-                {
-                    g_Bot[client].iDamageDealt += delta;
-                    g_Bot[client].fLastDamageAt = now;
-                    Dbg("bot %d dealt %d to %d (total %d)",
-                        client, delta, target, g_Bot[client].iDamageDealt);
-                }
-            }
-            g_Bot[client].fLastTargetHp = hp;
-        }
+        g_Bot[client].fLastTargetHp = float(GetEntProp(target, Prop_Data, "m_iHealth"));
+    }
+    else
+    {
+        g_Bot[client].fLastTargetHp = -1.0;
     }
 
-    // 4) 选枪 + 切枪。优先有弹药的枪，近战兜底。
-    int wantGun = Wep_ChooseBestGun(client);
+    // 4) 选枪 + 切枪。先算目标距离，再按距离档位选枪（近霰弹/中冲锋枪/远步枪）。
     float aimPoint[3];
     Targ_AimPoint(target, aimPoint);
     float eye[3];
     GetClientEyePosition(client, eye);
     float dist = GetVectorDistance(eye, aimPoint);
+    g_Bot[client].fThreatDist = dist;
+    int wantGun = Wep_ChooseBestGun(client, dist);
 
     // 4a) nav 寻路决策：目标很远（> ANH_NAV_ENGAGE_DIST）或看不到目标时，
     //     走 A* 路径逼近；其余情况用距离带几何走位（Bot_ComputeMovement）。
@@ -241,7 +245,7 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
         // 枪械全空/过近：贴脸用近战。
         wantGun = (dist < 90.0) ? Wep_GetMelee(client) : -1;
         if (wantGun == -1)
-            wantGun = Wep_ChooseBestGun(client); // 没近战就拿（空）枪等待补弹
+            wantGun = Wep_ChooseBestGun(client, dist); // 没近战就拿（空）枪等待补弹
     }
     if (wantGun != -1)
         Wep_RequestSwitch(client, wantGun);
@@ -270,7 +274,7 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
     if (active != -1)
     {
         int clip = Wep_GetClip(active);
-        if (aimed && (clip > 0 || clip == -1))
+        if (aimed && now >= g_Bot[client].fNextFireAt && (clip > 0 || clip == -1))
         {
             if (Targ_FriendlyBlock(client, target, aimPoint))
             {
@@ -295,6 +299,14 @@ stock bool BotAI_OnRunCmd(int client, int &buttons, int &impulse,
     if (g_Bot[client].bScoutWalk && now >= g_Bot[client].fNextJumpAt)
     {
         g_Bot[client].fNextJumpAt = now + 0.7;
+        buttons |= IN_JUMP_BIT;
+    }
+    // 威胁内闪避：目标很近时周期性跳跃 + 翻转绕步方向，降低被集火命中率。
+    else if (g_Bot[client].fThreatDist < ANH_DODGE_DIST && now >= g_Bot[client].fNextDodgeAt)
+    {
+        g_Bot[client].fNextDodgeAt = now + GetRandomFloat(0.8, 1.6);
+        g_Bot[client].iStrafeSign = -g_Bot[client].iStrafeSign;
+        g_Bot[client].fNextStrafeFlip = now + GetRandomFloat(0.3, 0.7);
         buttons |= IN_JUMP_BIT;
     }
     Bot_ComputeMovement(client, eye, aimPoint, angles, vel);
@@ -695,7 +707,25 @@ stock void Bot_ComputeMovement(int client,
     // 距离带 → 期望世界方向。
     float desired[3];
     float now = GetGameTime();
-    if (flatDist > ANH_MOVE_BAND_FAR)
+    // 生存优先：低血量或威胁贴脸时直接后撤风筝（满速远离 + 少量侧移）。
+    float hp = float(GetEntProp(client, Prop_Data, "m_iHealth"));
+    bool lowHp = (hp > 0.0 && hp < ANH_FLEE_HP);
+    bool closeThreat = (flatDist < ANH_KITE_DIST);
+    if (lowHp || closeThreat)
+    {
+        // 威胁下把绕步翻转间隔从 0.7~1.8s 压到 0.25~0.6s，走位更不规则。
+        if (now >= g_Bot[client].fNextStrafeFlip)
+        {
+            g_Bot[client].iStrafeSign = -g_Bot[client].iStrafeSign;
+            g_Bot[client].fNextStrafeFlip = now + GetRandomFloat(0.25, 0.6);
+        }
+        float s = float(g_Bot[client].iStrafeSign);
+        desired[0] = -toDir[0] - toDir[1] * s * 0.6;
+        desired[1] = -toDir[1] + toDir[0] * s * 0.6;
+        desired[2] = 0.0;
+        NormalizeVector(desired, desired);
+    }
+    else if (flatDist > ANH_MOVE_BAND_FAR)
     {
         desired = toDir;                       // 逼近
     }
@@ -734,9 +764,11 @@ stock void Bot_ComputeMovement(int client,
     float lf = GetVectorDotProduct(resolved, fwd);
     float lr = GetVectorDotProduct(resolved, right);
 
-    float speed = (flatDist < ANH_MOVE_BAND_NEAR) ? ANH_MOVE_BACKOFF
-               : (flatDist > ANH_MOVE_BAND_FAR)   ? ANH_MOVE_SPEED
-               : ANH_MOVE_STRAFE;
+    float speed;
+    if (lowHp || closeThreat)               speed = ANH_MOVE_SPEED;   // 风筝/逃跑满速
+    else if (flatDist < ANH_MOVE_BAND_NEAR) speed = ANH_MOVE_BACKOFF;
+    else if (flatDist > ANH_MOVE_BAND_FAR)  speed = ANH_MOVE_SPEED;
+    else                                    speed = ANH_MOVE_STRAFE;
     vel[0] = lf * speed;
     vel[1] = lr * speed;
     vel[2] = 0.0;

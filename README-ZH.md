@@ -31,6 +31,7 @@
 
    ```
    addons/sourcemod/plugins/anhsbot.smx
+   addons/sourcemod/plugins/anhsnav.smx
    addons/sourcemod/gamedata/sdktools.games/custom/game.anhsource.txt
    addons/sourcemod/configs/anhsbot_bots.cfg
    cfg/sourcemod/plugin.anhsbot.cfg
@@ -77,7 +78,7 @@
 | `anhsbot_teamplay` | `1` | 团队模式：幸存者 team 2/3 互为队友——不互杀、防友伤、空闲集结。0=各自为战。 |
 | `anhsbot_nav` | `1` | nav A\* 寻路开关。地图有 `.nav` 时启用；无则自动回退纯几何走位。 |
 | `anhsbot_no_achievements` | `1` | 地图启动禁用 logic_achievement（规避假客户端成就空指针崩溃）。 |
-| `anhsbot_skill` | `2` | 默认技能等级：0=低 1=普通 2=高 3=精英（影响瞄准误差与反应）。 |
+| `anhsbot_skill` | `-1` | 技能等级：`-1` = 使用 `anhsbot_bots.cfg` 里每个名字对应的等级；0=低 1=普通 2=高 3=精英（>=0 时全局覆盖）。 |
 | `anhsbot_name_prefix` | `AnhBot` | bot 名字前缀（未安装名字池时使用，自动加两位序号）。 |
 | `anhsbot_autofill` | `1` | 是否自动补齐到目标数量。 |
 | `anhsbot_fill_interval` | `3.0` | 自动补齐检查间隔（秒）。 |
@@ -87,6 +88,25 @@
 
 **bot 名字池**：`addons/sourcemod/configs/anhsbot_bots.cfg`，每行
 `<名字> <技能0-3>`，共 32 个预设。删除该文件则回退到名字前缀方式。
+
+---
+
+## 4.5 配套插件 `anhsnav`（导航网格生成器）
+
+`anhsnav.smx` 与 `anhsbot.smx` 配套分发。它拦截**全部 `nav_*` 命令**（与 Valve 官方
+命名/语义一致，见 source-sdk-2013 的 `nav*.cpp`），并提供离线导航网格烘焙器，让
+没有 `.nav` 的地图也能寻路：
+
+- **`nav_generate` / `nav_progress` / `nav_save` / `nav_load` / `nav_analyze`** ——
+  烘焙 v16 `.nav`（网格采样 → 洪水填充岛屿 → 矩形合并 → 连通 → 写文件，分片跨帧
+  执行，SourcePawn 永不超时）。输出到 `maps/anhsbot/<map>.nav`，由 `anhsbot` 直接读取。
+- **`nav_perfframe` / `nav_perfframe_clear`** —— 报告插件自身每帧脚本开销
+  （防止 "Script execution timed out"；生成已按 8ms/帧 上限看护）。
+- **其余全部 `nav_*` 命令**（编辑器侧，共 204 个名字）均被应答为已处理，不再出现
+  `Unknown command` 或作弊命令拒绝。
+
+`anhsnav.smx` 与 `anhsbot.smx` 同目录安装即可，加载顺序任意。`anhsnav_autogen 1`
+时地图启动自动烘焙（否则 rcon 手动执行 `nav_generate`）。
 
 ---
 
@@ -147,17 +167,23 @@ bot 可能嵌进几何体（vel 有值但零位移；`TeleportEntity` 对 fake c
 | `anhsbot_diag` | 诊断：索敌缓存/LOS/武器切换细节。 |
 | `anhsbot_tele <client> <x> <y> <z>` | 传送 bot 到坐标（注意：实测瞬移对 fake client 效果有限）。 |
 | `anhsbot_npc <类名> <nearClient> [距离]` | 在指定 bot 前方生成一个 NPC（测试用）。 |
+| `anhsbot_navreload` | 从磁盘重新加载 nav 网格（在 anhsnav 的 `nav_generate`/`nav_save` 之后）。 |
+| `anhsbot_perf` | 性能观测：地图/实体数量、NPC 缓存大小、累计 OnPlayerRunCmd 调用量。 |
+| `anhsnav: nav_perfframe` | anhsnav 自身每帧脚本开销 + 上次生成墙钟耗时。 |
+| `anhsnav: nav_perfframe_clear` | 清零 anhsnav 性能计数器。 |
 
 ---
 
 ## 6. 已知限制 / 后续路线
 
 - **僵尸队**：引擎限制（见第 4 节），当前形态为人类队对抗 NPC。
-- **nav 覆盖**：37 张图中 11 张带 `.nav` 可直接寻路；其余 26 张可用引擎命令
-  `nav_generate`（需 `sv_cheats 1`）现场烘焙后同样支持。有 nav 的图若与运行时几何
+- **nav 覆盖**：带 `.nav` 的地图可直接寻路；其余地图用 `anhsnav` 的 `nav_generate`
+  现场烘焙（无需 `sv_cheats`——全部 nav\_\* 命令已被拦截）。有 nav 的图若与运行时几何
   不一致，bot 可能嵌进几何体——三层自救可自动恢复，根治靠重新烘焙。
 - **重生**：HL2MP 无回合制/无 `mp_forcerespawn`，死亡 bot 由看门狗用原生
   `CreateFakeClient` 重建（同名同队、结转统计）。
+- **击杀归因**：NPC 无 `player_death` 事件，击杀靠"实体移除 + 伤害窗口"启发式归因
+  （第三方 NPC 互殴造成的击杀可能漏记；ANHS 地图中较少见）。
 - **反作弊/公网**：部署时建议配合 VAC/SV 反作弊与 `sv_pure 0`（按运营需要）。
 
 ---
@@ -170,6 +196,9 @@ bot 可能嵌进几何体（vel 有值但零位移；`TeleportEntity` 对 fake c
 - **bot 干站不动**：看控制台日志——卡住会打 `stuck (moved N in 2s, count N)`，
   随后 `scout walk` / `cursed N area(s)` / `geometry trap, rebuild scheduled`
   是自救链在工作的信号（均带 bot 序号，可定位到具体 bot）。
+- **怀疑掉帧**：运行 `anhsbot_perf`（脚本负载观测）与 `nav_perfframe`（anhsnav 自身
+  每帧开销）。生成已按 8ms/帧 上限看护，SM 超时看门狗在 50ms/帧；cdb 实跑中引擎
+  tickrate 稳定 66.7 fps。
 - **服务器崩溃**：崩溃时 cdb 会自动生成 `anh_crash.dmp`，用
   `cdb -z anh_crash.dmp -c "!analyze -v; q"` 分析。
 - **插件加载失败**：用 `sm plugins list` 查看报错；常见为 gamedata 路径/偏移错误。

@@ -542,7 +542,7 @@ public bool Nav_Load(const char[] map)
     g_iNavEdgeOff[areaCount] = e;
     g_iNavEdges = e;
     g_bNavLoaded = true;
-    Log("[anhsbot] nav: loaded %s — %d areas, %d directed edges", path, areaCount, g_iNavEdges);
+    Log("[anhsbot] nav: loaded %s - %d areas, %d directed edges", path, areaCount, g_iNavEdges);
     return true;
 }
 

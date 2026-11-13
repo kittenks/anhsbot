@@ -62,7 +62,7 @@ public void OnPluginStart()
     g_cvFillInterval = CreateConVar("anhsbot_fill_interval", "3.0", "Seconds between autofill checks", _, true, 1.0);
     g_cvManageFlags = CreateConVar("anhsbot_manage_flags", "1", "Continuously re-assert FL_FAKECLIENT on bots");
     g_cvRespawnDelay = CreateConVar("anhsbot_respawn_delay", "6.0", "Seconds a dead bot waits before the watchdog forces a respawn", _, true, 1.0);
-    g_cvSkill = CreateConVar("anhsbot_skill", "2", "Default bot skill level 0=low 1=normal 2=high 3=elite", _, true, 0.0, true, float(ANH_SKILL_MAX));
+    g_cvSkill = CreateConVar("anhsbot_skill", "-1", "Bot skill: -1 = use per-bot level from anhsbot_bots.cfg, 0=low 1=normal 2=high 3=elite (global override)", _, true, -1.0, true, float(ANH_SKILL_MAX));
     g_cvDebug = CreateConVar("anhsbot_debug", "0", "Verbose debug logging", _, true, 0.0, true, 1.0);
 
     // quota：bot 配额（>0 覆盖 anhsbot_count，维持在线总数；不足自动加、超出自动踢）
@@ -99,6 +99,8 @@ public void OnPluginStart()
     RegAdminCmd("anhsbot_diag",   Cmd_Diag,   ADMFLAG_GENERIC, "Diagnose targeting cache/LOS/weapon");
     RegAdminCmd("anhsbot_tele",   Cmd_Tele,   ADMFLAG_GENERIC, "anhsbot_tele <client> <x> <y> <z>");
     RegAdminCmd("anhsbot_npc",    Cmd_SpawnNpc,ADMFLAG_GENERIC, "anhsbot_npc <classname> <nearClient> [dist]");
+    RegConsoleCmd("anhsbot_navreload", Cmd_NavReload, "Reload the nav mesh from disk (e.g. after nav_generate)");
+    RegAdminCmd("anhsbot_perf", Cmd_Perf, ADMFLAG_GENERIC, "Performance observation: tickrate / entity count / runcmd load");
 
     CreateTimer(GetConVarFloat(g_cvFillInterval), Timer_AutoFill, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 
@@ -134,10 +136,49 @@ public void Nav_MapStartFrame()
 {
     char map[64];
     GetCurrentMap(map, sizeof(map));
-    if (g_cvNavEnable == null || g_cvNavEnable.BoolValue)
-        Nav_Load(map);
-    else
+    if (g_cvNavEnable == null || !g_cvNavEnable.BoolValue)
+    {
         Log("[anhsbot] nav: disabled by cvar");
+        return;
+    }
+    Nav_Load(map);
+    // anhsnav 可能在地图启动后才生成 nav 文件（nav_generate / nav_save）。
+    // 文件还不存在时静默重试，等它出现后自动加载。
+    if (!g_bNavLoaded)
+        CreateTimer(5.0, Timer_NavRetry, _, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+}
+
+// nav 文件可能在运行中被 anhsnav 生成。文件不存在 → 静默等待；
+// 文件出现 → 加载一次（成败都停，避免解析失败时每 5 秒刷屏，
+// 必要时用 anhsbot_navreload 手动重载）。
+public Action Timer_NavRetry(Handle timer)
+{
+    if (g_bNavLoaded || (g_cvNavEnable != null && !g_cvNavEnable.BoolValue))
+        return Plugin_Stop;
+    char map[64], path[PLATFORM_MAX_PATH];
+    GetCurrentMap(map, sizeof(map));
+    if (!Nav_FindNavFile(map, path, sizeof(path)))
+        return Plugin_Continue;
+    bool ok = Nav_Load(map);
+    if (ok)
+        Log("[anhsbot] nav: picked up '%s' (%d areas)", path, g_iNavAreas);
+    return Plugin_Stop;
+}
+
+public Action Cmd_NavReload(int client, int args)
+{
+    if (g_cvNavEnable != null && !g_cvNavEnable.BoolValue)
+    {
+        ReplyToCommand(client, "[anhsbot] nav: disabled by cvar");
+        return Plugin_Handled;
+    }
+    char map[64];
+    GetCurrentMap(map, sizeof(map));
+    if (Nav_Load(map))
+        ReplyToCommand(client, "[anhsbot] nav reloaded: %d areas", g_iNavAreas);
+    else
+        ReplyToCommand(client, "[anhsbot] nav reload failed (no file or parse error)");
+    return Plugin_Handled;
 }
 
 // 禁用地图上所有 logic_achievement 实体。

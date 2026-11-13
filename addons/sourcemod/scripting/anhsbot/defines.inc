@@ -53,9 +53,20 @@
 // —— 技能等级（0=低 1=普通 2=高 3=精英）——
 // 影响瞄准插值（跟手程度）与开火允许误差（越准越难打偏）。
 // 数组下标 = 技能等级。
+// anhsbot_skill = -1 时每个 bot 用 anhsbot_bots.cfg 里该名字对应的等级（见 bot.sp）。
 #define ANH_SKILL_MAX       3
 float g_fAimLerpBySkill[4] = { 0.20, 0.30, 0.42, 0.55 };
 float g_fAimErrBySkill[4]  = { 10.0, 6.0,  3.0,  1.5  };
+float g_fReactBySkill[4]   = { 1.20, 0.80, 0.45, 0.20 };  // 新目标反应延迟（秒）
+
+// —— 武器距离档位（weapons.sp 选枪用）——
+#define ANH_RANGE_CLOSE   170.0    // <此距离 → 霰弹/双管/短喷贴脸
+#define ANH_RANGE_MID     750.0    // 此区间 → 冲锋枪/手枪；>此距离 → 步枪/狙击/机枪
+
+// —— 生存 AI（runcmd.sp）——
+#define ANH_KITE_DIST     260.0    // 威胁进入此距离 → 后撤风筝（仍可开火）
+#define ANH_DODGE_DIST    340.0    // 威胁进入此距离 → 允许闪避跳跃
+#define ANH_FLEE_HP       35.0     // 血量低于此 → 逃跑（无视距离带，满速撤离）
 
 // —— 走位 ——
 // 距离带：把"逼近 / 站定"的二值逻辑升级为三段式，
@@ -107,9 +118,11 @@ enum struct BotState
     int    iWantWeapon;       // 待切武器实体（usercmd weaponselect），0 无
     int    iWantSubtype;      // 待切武器 m_iSubType
     float  fNextAmmoCheck;    // 下次补弹时间
-    float  fNextFireAt;       // 下次允许开火的游戏时间（点射节奏控制）
+    float  fNextFireAt;       // 下次允许开火的游戏时间（新目标的技能反应延迟）
     int    iStrafeSign;       // 绕步方向（+1/-1），定时翻转制造不规则走位
     float  fNextStrafeFlip;   // 下次翻转绕步方向的游戏时间
+    float  fThreatDist;       // 当前目标的水平距离（生存 AI 用，每帧更新）
+    float  fNextDodgeAt;      // 下次允许闪避跳跃的游戏时间
     float  fLastVelFwd;       // 诊断：上帧本地前向速度（走位验证用）
     float  fLastVelRight;     // 诊断：上帧本地侧向速度（绕步/墙滑验证用）
     int    iShotsFired;       // 本命开火次数（统计）

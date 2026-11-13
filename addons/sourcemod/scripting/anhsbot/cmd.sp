@@ -310,3 +310,29 @@ public Action Cmd_AimInfo(int client, int args)
     }
     return Plugin_Handled;
 }
+
+// 性能观测：脚本超时风险（每帧 OnPlayerRunCmd 调用量）+ 引擎 tickrate。
+// 配合 anhsnav 的 nav_perfframe 一起判断"掉帧"来源：
+//   - sm 报 "Script execution timed out" → anhsbot 帧内 trace 过多；
+//   - tickrate 稳定 66.7 → 引擎无掉帧；nav 生成已分片，不应掉帧。
+public Action Cmd_Perf(int client, int args)
+{
+    int runcmd = 0;
+    for (int i = 1; i <= MaxClients; i++)
+        runcmd += g_Bot[i].iRunCmds;
+
+    char map[64];
+    GetCurrentMap(map, sizeof(map));
+
+    char msg[512];
+    Format(msg, sizeof(msg),
+        "[anhsbot] perf: map=%s online=%d entities=%d npcCache=%d runcmds=%d (OnPlayerRunCmd calls since map start)",
+        map, CountManagedBots(), GetEntityCount(), g_iCacheCount, runcmd);
+    ReplyToCommand(client, "%s", msg);
+
+    char note[512];
+    Format(note, sizeof(note),
+        "[anhsbot] perf: SM times out at 50ms/frame; anhsnav generation is chunked with an 8ms/frame guard (see nav_perfframe)");
+    ReplyToCommand(client, "%s", note);
+    return Plugin_Handled;
+}

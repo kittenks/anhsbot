@@ -26,16 +26,32 @@ Handle g_hWeaponEquip = null;
 
 // 人类 bot 标准 loadout（人类队伍 Rebels/Combine）。
 // 重力枪 weapon_physcannon 出生自带，无需处理。
-// 真机探针 wepprobe 验证 ANHS 共 44 把可生成武器；下表是其枪械子集（按偏好排序）。
+// 真机探针 wepprobe 验证 ANHS 共 44 把可生成武器；下表按距离档位分池：
+// 近 → 霰弹/双管/短喷，中 → 冲锋枪/手枪，远 → 步枪/狙击/机枪。
+// 【不给爆炸物】weapon_rpg / weapon_grenadelauncher / weapon_molotov / weapon_frag /
+// weapon_slam / weapon_mine 不进任何池（bot 自己炸死自己）。
 
-// 主武器池（随机选一把，丰富火力；前面的在 Wep_ChooseBestGun 中优先选用）。
-static const char g_szPrimaryPool[][] =
+// 近距离池（< ANH_RANGE_CLOSE）：霰弹/双管贴脸爆发。
+// wepprobe2 实测：仅 weapon_smg2 / weapon_ar1 真正无法创建（unknown entity type）。
+static const char g_szClosePool[][] =
 {
-    "weapon_ar2", "weapon_ak47", "weapon_m4a1", "weapon_mp5", "weapon_ump45",
-    "weapon_galil", "weapon_sg552", "weapon_smg1", "weapon_m249", "weapon_m3pump",
-    "weapon_shotgun", "weapon_357", "weapon_crossbow", "weapon_scout", "weapon_dualies",
-    "weapon_fiveseven", "weapon_glock", "weapon_p228", "weapon_pistolsilenced",
-    "weapon_baikal56", "weapon_annabelle"
+    "weapon_m3pump", "weapon_shotgun", "weapon_baikal56", "weapon_annabelle"
+};
+
+// 中距离池（ANH_RANGE_CLOSE ~ ANH_RANGE_MID）：冲锋枪/手枪。
+static const char g_szMidPool[][] =
+{
+    "weapon_smg1", "weapon_mp5", "weapon_ump45", "weapon_dualies",
+    "weapon_pistol", "weapon_357", "weapon_fiveseven", "weapon_glock",
+    "weapon_p228", "weapon_pistolsilenced"
+};
+
+// 远距离池（> ANH_RANGE_MID）：步枪/狙击/轻机枪。
+static const char g_szFarPool[][] =
+{
+    "weapon_ak47", "weapon_m4a1", "weapon_galil", "weapon_sg552",
+    "weapon_ar2", "weapon_scout", "weapon_m249",
+    "weapon_patriot", "weapon_crossbow"
 };
 
 // 近战池（兜底/贴脸/补刀）。
@@ -44,11 +60,8 @@ static const char g_szMeleePool[][] =
     "weapon_crowbar", "weapon_stunstick", "weapon_knife", "weapon_axe",
     "weapon_cleaver", "weapon_sledgehammer", "weapon_bat", "weapon_hockeystick",
     "weapon_pipe", "weapon_pipewrench", "weapon_shovel", "weapon_pickaxe",
-    "weapon_pitchfork", "weapon_hammer"
+    "weapon_pitchfork", "weapon_hammer", "weapon_blowtorch"
 };
-
-// 选枪优先级（=主武器池顺序；Wep_ChooseBestGun 按顺序取第一把有弹药的）。
-#define g_szGunPriority g_szPrimaryPool
 
 // 按实体索引记录每把武器首次见到时的"满弹夹"（give 后即满，作为补弹基准）。
 int g_iMaxClip[4096];
@@ -92,28 +105,34 @@ public int Wep_GiveAndEquip(int client, const char[] className)
     return w;
 }
 
-// 人类 bot 出生后发放标准装备：随机主武器一把 + 手枪（副武器必有）+ 随机近战一把。
-// 已发放则跳过（由 g_Bot[client].bArmed 守门）。
-public void Wep_EquipHumanLoadout(int client)
+// 从池中随机挑一把能成功生成的武器发给 bot（已有同类则跳过，逐个尝试）。
+stock void Wep_GiveFromPool(int client, const char pool[][64], int n)
 {
-    int nPrim = sizeof(g_szPrimaryPool);
-
-    // 主武器：随机挑一把能成功生成（GivePlayerItem 可能个别类失败，逐个尝试）。
-    int order[MAXPLAYERS + 1];
-    for (int i = 0; i < nPrim; i++) order[i] = i;
-    for (int i = nPrim - 1; i > 0; i--)   // Fisher-Yates 打乱
+    int order[64];
+    if (n > sizeof(order)) n = sizeof(order);
+    for (int i = 0; i < n; i++) order[i] = i;
+    for (int i = n - 1; i > 0; i--)   // Fisher-Yates 打乱
     {
         int j = GetRandomInt(0, i);
         int t = order[i]; order[i] = order[j]; order[j] = t;
     }
-    for (int k = 0; k < nPrim; k++)
+    for (int k = 0; k < n; k++)
     {
         int idx = order[k];
-        if (Wep_FindByClass(client, g_szPrimaryPool[idx]) != -1)
+        if (Wep_FindByClass(client, pool[idx]) != -1)
             continue;
-        if (Wep_GiveAndEquip(client, g_szPrimaryPool[idx]) > 0)
-            break;
+        if (Wep_GiveAndEquip(client, pool[idx]) > 0)
+            return;
     }
+}
+
+// 人类 bot 出生后发放标准装备：近/中/远三档各一把主武器（保证任何距离都有
+// 趁手的枪）+ 手枪（副武器必有）+ 随机近战一把。已发放则跳过（bArmed 守门）。
+public void Wep_EquipHumanLoadout(int client)
+{
+    Wep_GiveFromPool(client, g_szClosePool, sizeof(g_szClosePool));
+    Wep_GiveFromPool(client, g_szMidPool,   sizeof(g_szMidPool));
+    Wep_GiveFromPool(client, g_szFarPool,   sizeof(g_szFarPool));
 
     // 手枪：副武器兜底，必有。
     if (Wep_FindByClass(client, "weapon_pistol") == -1)
@@ -158,12 +177,12 @@ public int Wep_GetClip(int w)
     return GetEntProp(w, Prop_Data, "m_iClip1");
 }
 
-// 选一把当前应优先使用的枪（有弹药）；无可用枪返回 -1。
-public int Wep_ChooseBestGun(int client)
+// 在某个池中按顺序取第一把有弹药的枪；没有返回 -1。
+stock int Wep_ChooseInPool(int client, const char pool[][64], int n)
 {
-    for (int i = 0; i < sizeof(g_szGunPriority); i++)
+    for (int i = 0; i < n; i++)
     {
-        int w = Wep_FindByClass(client, g_szGunPriority[i]);
+        int w = Wep_FindByClass(client, pool[i]);
         if (w == -1)
             continue;
         // 弹夹还有子弹即可选；弹夹空则交给补弹逻辑，期间降级到下一把。
@@ -173,13 +192,44 @@ public int Wep_ChooseBestGun(int client)
     return -1;
 }
 
+// 按距离档位选一把当前应优先使用的枪（有弹药）；该档全空则退化到其他档。
+// dist = bot 眼睛到目标瞄准点的距离（Source 单位）。无可用枪返回 -1。
+public int Wep_ChooseBestGun(int client, float dist)
+{
+    int w;
+    if (dist < ANH_RANGE_CLOSE)
+    {
+        w = Wep_ChooseInPool(client, g_szClosePool, sizeof(g_szClosePool));
+        if (w != -1) return w;
+        w = Wep_ChooseInPool(client, g_szMidPool, sizeof(g_szMidPool));
+        if (w != -1) return w;
+        return Wep_ChooseInPool(client, g_szFarPool, sizeof(g_szFarPool));
+    }
+    if (dist <= ANH_RANGE_MID)
+    {
+        w = Wep_ChooseInPool(client, g_szMidPool, sizeof(g_szMidPool));
+        if (w != -1) return w;
+        w = Wep_ChooseInPool(client, g_szFarPool, sizeof(g_szFarPool));
+        if (w != -1) return w;
+        return Wep_ChooseInPool(client, g_szClosePool, sizeof(g_szClosePool));
+    }
+    w = Wep_ChooseInPool(client, g_szFarPool, sizeof(g_szFarPool));
+    if (w != -1) return w;
+    w = Wep_ChooseInPool(client, g_szMidPool, sizeof(g_szMidPool));
+    if (w != -1) return w;
+    return Wep_ChooseInPool(client, g_szClosePool, sizeof(g_szClosePool));
+}
+
 // 近战兜底（子弹打光/贴脸时）。
 public int Wep_GetMelee(int client)
 {
-    int w = Wep_FindByClass(client, "weapon_crowbar");
-    if (w != -1)
-        return w;
-    return Wep_FindByClass(client, "weapon_stunstick");
+    for (int i = 0; i < sizeof(g_szMeleePool); i++)
+    {
+        int w = Wep_FindByClass(client, g_szMeleePool[i]);
+        if (w != -1)
+            return w;
+    }
+    return -1;
 }
 
 // 请求在 CUserCmd 里切到指定武器（引擎下一帧处理）。

@@ -94,6 +94,9 @@ public void Bot_InitState(int bot, int desiredTeam)
     g_Bot[bot].iShotsFired = 0;
     g_Bot[bot].iStrafeSign = (GetRandomInt(0,1) == 0) ? -1 : 1;
     g_Bot[bot].fNextStrafeFlip = 0.0;
+    g_Bot[bot].fNextFireAt = 0.0;
+    g_Bot[bot].fThreatDist = 0.0;
+    g_Bot[bot].fNextDodgeAt = 0.0;
     g_Bot[bot].iKills = 0;
     g_Bot[bot].iDeaths = 0;
     g_Bot[bot].iDamageDealt = 0;
@@ -153,6 +156,21 @@ public int Bot_AddExact(const char[] name, int desiredTeam)
     return bot;
 }
 
+// 技能解析：anhsbot_skill >= 0 → 全局覆盖；-1 → 用配置文件里该名字对应的
+// 等级（poolSkill，-1 表示该名字不在池中，回退默认 1）。
+public int Bot_ResolveSkill(int poolSkill)
+{
+    if (g_cvSkill != null && g_cvSkill.IntValue >= 0)
+    {
+        int s = g_cvSkill.IntValue;
+        if (s > ANH_SKILL_MAX) s = ANH_SKILL_MAX;
+        return s;
+    }
+    if (poolSkill >= 0 && poolSkill <= ANH_SKILL_MAX)
+        return poolSkill;
+    return 1;
+}
+
 // 对外：创建一个 bot。返回 client 索引（>0 成功），0 失败。
 public int Bot_Add(const char[] explicitName, int desiredTeam)
 {
@@ -163,18 +181,17 @@ public int Bot_Add(const char[] explicitName, int desiredTeam)
     }
 
     char name[64];
-    int skill;
+    int poolSkill = -1;
 
     if (explicitName[0] != '\0')
     {
         strcopy(name, sizeof(name), explicitName);
-        // 显式名字：在池里查对应技能，没有则用默认。
-        skill = (g_cvSkill != null) ? g_cvSkill.IntValue : 1;
+        // 显式名字：在池里查对应技能，没有则 poolSkill 保持 -1。
         for (int i = 0; i < g_iNamePoolCount; i++)
         {
             if (StrEqual(g_szNamePool[i], name, false))
             {
-                skill = g_iNamePoolSkill[i];
+                poolSkill = g_iNamePoolSkill[i];
                 break;
             }
         }
@@ -185,22 +202,23 @@ public int Bot_Add(const char[] explicitName, int desiredTeam)
         int tries = 0;
         do
         {
-            BotsCfg_Pick(name, skill);
+            BotsCfg_Pick(name, poolSkill);
             tries++;
         }
         while (Bot_NameInUse(name) && tries < g_iNamePoolCount + 1);
 
-        // 池名字不够（全部占用）或池为空 → 回退前缀名 + 默认技能。
+        // 池名字不够（全部占用）或池为空 → 回退前缀名（技能查不到，-1）。
         if (Bot_NameInUse(name))
         {
             char prefix[32] = "AnhBot";
             g_cvNamePrefix.GetString(prefix, sizeof(prefix));
             g_iNameUid++;
             Format(name, sizeof(name), "%s%02d", prefix, g_iNameUid);
-            skill = (g_cvSkill != null) ? g_cvSkill.IntValue : 1;
+            poolSkill = -1;
         }
     }
 
+    int skill = Bot_ResolveSkill(poolSkill);
     int bot = Bot_AddExact(name, desiredTeam);
     if (bot > 0)
         g_Bot[bot].iSkill = skill;
@@ -388,6 +406,9 @@ public void Bot_OnPlayerSpawn(Event event, const char[] name, bool dontBroadcast
         g_Bot[client].iWantSubtype = 0;
         g_Bot[client].fRetargetAt = 0.0;
         g_Bot[client].fNextAmmoCheck = 0.0;
+        g_Bot[client].fNextFireAt = 0.0;
+        g_Bot[client].fThreatDist = 0.0;
+        g_Bot[client].fNextDodgeAt = 0.0;
         g_Bot[client].iShotsFired = 0;
         g_Bot[client].fLastTargetHp = -1.0;
         g_Bot[client].fLastDamageAt = 0.0;

@@ -9,7 +9,7 @@ ConVar g_cvFillInterval  = null;   // 补齐检查间隔（秒）
 ConVar g_cvManageFlags   = null;   // 看门狗：每帧重设 FL_FAKECLIENT
 ConVar g_cvRespawnDelay  = null;   // anhsbot_respawn_delay 死亡多久后主动重生
 ConVar g_cvDebug         = null;   // 调试日志
-ConVar g_cvSkill         = null;   // anhsbot_skill 默认技能等级（0..3）
+ConVar g_cvSkill         = null;   // anhsbot_skill 技能：-1=用 anhsbot_bots.cfg 每名等级，>=0=全局覆盖
 
 // —— quota 自动加入 ----
 ConVar g_cvQuota          = null;  // anhsbot_quota bot 配额（>0 时维持在线总数，覆盖 count）
